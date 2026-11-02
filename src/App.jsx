@@ -1,7 +1,6 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import * as XLSX from 'xlsx';
 
-const STORAGE_KEY='careeros-user-tracker-v1';
 async function loadBundledJobs(){
  const response=await fetch('/jobs-data.json.gz.b64',{cache:'no-store'});
  if(!response.ok)throw new Error('Could not load the GitHub job dataset');
@@ -9,9 +8,13 @@ async function loadBundledJobs(){
  const binary=atob(encoded);
  const bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
- const workbookBytes=new Uint8Array(await new Response(stream).arrayBuffer());
- const wb=XLSX.read(workbookBytes,{type:'array',cellDates:true});
- return ['Individual Jobs','Applied','not-applied'].filter(n=>wb.Sheets[n]).flatMap(n=>normalizeSheet(wb.Sheets[n],n));
+ const dataset=JSON.parse(await new Response(stream).text());
+ const sheets=dataset.sheets||{};
+ return ['Individual Jobs','Applied','not-applied'].flatMap(sourceTab=>(sheets[sourceTab]||[]).map((cells,i)=>{
+  const [company,title,location,mode,salary,freshness,url]=cells;
+  const raw={'Company':company,'Job Title':title,'Location':location,'Work Mode / Type':mode,'Salary / Stipend':salary,'Freshness / Status':freshness,'Direct Apply URL':url};
+  return {id:sourceTab+'-'+(i+1),raw,company:company||'—',title:title||'Untitled role',location:location||'—',mode:mode||'—',status:sourceTab==='Applied'?'Applied':sourceTab==='not-applied'?'Not Applied':'Individual',freshness:freshness||'—',salary:salary||'Not specified',skills:'',url,sourceTab};
+ }));
 }
 const norm = value => String(value ?? '').toLowerCase().trim().replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
 const FIELD_ALIASES = {
@@ -44,9 +47,9 @@ const isApplied = job => job.sourceTab==='Applied';
 function App(){
  const [jobs,setJobs]=useState([]),[fileName,setFileName]=useState('GitHub job tracker'),[sheetNames,setSheetNames]=useState([]),[sheet,setSheet]=useState(''),[workbook,setWorkbook]=useState(null),[tab,setTab]=useState('All Jobs'),[query,setQuery]=useState(''),[mode,setMode]=useState('All work modes'),[sort,setSort]=useState('company'),[notice,setNotice]=useState('Upload your Excel or CSV tracker to load your own jobs.');
  const input=useRef(null);
- useEffect(()=>{let active=true;try{const saved=localStorage.getItem(STORAGE_KEY);if(saved){const rows=JSON.parse(saved);if(Array.isArray(rows)&&rows.length){setJobs(rows);setFileName('Saved uploaded tracker');setNotice('Loaded '+rows.length+' saved jobs. This version stays active until you upload another workbook.');return()=>{active=false;};}}}catch(e){localStorage.removeItem(STORAGE_KEY);}loadBundledJobs().then(rows=>{if(active){setJobs(rows);setNotice('Automatically loaded '+rows.length+' jobs from the GitHub tracker.');}}).catch(()=>{if(active)setNotice('Could not load the GitHub tracker. Upload a workbook to set your saved version.');});return()=>{active=false;};},[]);
+ useEffect(()=>{let active=true;loadBundledJobs().then(rows=>{if(active){setJobs(rows);setNotice('Automatically loaded '+rows.length+' jobs from the GitHub tracker.');}}).catch(()=>{if(active)setNotice('Could not load the saved GitHub tracker. You can upload a spreadsheet manually.');});return()=>{active=false;};},[]);
  const TRACKER_SHEETS=['Individual Jobs','Applied','not-applied'];
- const loadWorkbook=wb=>{const selected=TRACKER_SHEETS.filter(n=>wb.Sheets[n]);const all=selected.flatMap(n=>normalizeSheet(wb.Sheets[n],n));setSheetNames(selected);setJobs(all);setSheet('');setFileName('Saved uploaded tracker');try{localStorage.setItem(STORAGE_KEY,JSON.stringify(all));setNotice('Saved '+all.length+' rows in this browser. This dataset will remain active until the next upload.');}catch(e){setNotice('Loaded '+all.length+' rows, but browser storage is full; this upload may not persist after closing the browser.');}};
+ const loadWorkbook=wb=>{const selected=TRACKER_SHEETS.filter(n=>wb.Sheets[n]);const all=selected.flatMap(n=>normalizeSheet(wb.Sheets[n],n));setSheetNames(selected);setJobs(all);setSheet('');setNotice('Loaded '+all.length+' rows from '+selected.length+' tracker tabs.');};
  const onFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});setWorkbook(wb);setFileName(f.name);loadWorkbook(wb);setTab('All Jobs');setQuery('');}catch(err){setNotice('Could not read this file. Upload a valid .xlsx, .xls or .csv file.');}e.target.value='';};
  const applied=jobs.filter(j=>j.sourceTab==='Applied').length;
  const individualCount=jobs.filter(j=>j.sourceTab==='Individual Jobs').length;
