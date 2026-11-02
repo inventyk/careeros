@@ -1,14 +1,53 @@
 import React,{useMemo,useRef,useState} from 'react';
 import * as XLSX from 'xlsx';
-const norm=s=>String(s??'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\\s+/g,' ');
-const pick=(row,keys)=>{for(const key of keys){const found=Object.entries(row).find(([k])=>norm(k)===norm(key));if(found&&found[1]!==''&&found[1]!==null&&found[1]!==undefined)return found[1]}return ''};
-function normalize(rows){return rows.filter(r=>r&&Object.values(r).some(v=>String(v??'').trim())).map((r,i)=>({id:i+1,raw:r,company:pick(r,['Company','Company Name','Employer','Organization'])||'—',title:pick(r,['Job Title','Title','Position','Role'])||'Untitled role',location:pick(r,['Location','Job Location','City'])||'—',mode:pick(r,['Work Mode','Work Type','Remote/Onsite','Employment Type'])||'—',status:pick(r,['Status','Application Status','Applied Status'])||'Not Applied',salary:pick(r,['Salary','CTC','Compensation','Pay'])||'Not specified',skills:pick(r,['Skills','Required Skills','Key Skills'])||'',url:pick(r,['Apply URL','Apply Link','Application URL','Job URL','Link','Source URL','Source Link'])||''}));}
+
+const norm = value => String(value ?? '').toLowerCase().trim().replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+const FIELD_ALIASES = {
+  company: ['company','company name','employer','organization','organisation','firm','business name','employer name','hiring company'],
+  title: ['job title','title','position','role','job role','designation','opening','profile','job profile','vacancy'],
+  location: ['location','job location','city','work location','place','office location','job city','location city'],
+  mode: ['work mode','work type','remote onsite','remote or onsite','employment type','job type','workplace type','working mode','work arrangement'],
+  status: ['status','application status','applied status','application stage','applied','application','progress'],
+  salary: ['salary','ctc','compensation','pay','salary range','package','annual salary','stipend'],
+  skills: ['skills','required skills','key skills','technical skills','skill set','technologies'],
+  url: ['apply url','apply link','application url','job url','link','source url','source link','job link','application link','url'],
+  date: ['date','posted date','job date','application date','last date','deadline']
+};
+const headerScore = headers => headers.reduce((score,h) => score + (Object.values(FIELD_ALIASES).some(list=>list.some(a=>norm(h)===norm(a)||norm(h).includes(norm(a))))?1:0),0);
+function findColumn(headers,field){
+  const aliases=FIELD_ALIASES[field].map(norm);
+  let index=headers.findIndex(h=>aliases.includes(norm(h)));
+  if(index>=0)return index;
+  index=headers.findIndex(h=>{const n=norm(h);return aliases.some(a=>a.length>3&&(n.includes(a)||a.includes(n)));});
+  return index;
+}
+function normalizeSheet(sheet){
+  const matrix=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false,blankrows:false});
+  if(!matrix.length)return [];
+  let headerIndex=0,best=0;
+  for(let i=0;i<Math.min(matrix.length,15);i++){const score=headerScore(matrix[i]||[]);if(score>best){best=score;headerIndex=i;}}
+  const headers=(matrix[headerIndex]||[]).map((h,i)=>String(h??'').trim()||'Column '+(i+1));
+  const columns=Object.fromEntries(Object.keys(FIELD_ALIASES).map(k=>[k,findColumn(headers,k)]));
+  const rows=matrix.slice(headerIndex+1);
+  return rows.map((cells,i)=>{
+    const get=field=>{const idx=columns[field];return idx>=0?String(cells[idx]??'').trim():'';};
+    const raw=Object.fromEntries(headers.map((h,j)=>[h,cells[j]??'']));
+    const company=get('company'),title=get('title'),location=get('location'),mode=get('mode'),status=get('status'),salary=get('salary'),skills=get('skills'),url=get('url'),date=get('date');
+    const meaningful=[company,title,location,mode,status,salary,skills,url].some(Boolean);
+    if(!meaningful)return null;
+    return {id:i+1,raw,company:company||'—',title:title||'Untitled role',location:location||'—',mode:mode||'—',status:status||'Not Applied',salary:salary||'Not specified',skills,url,date};
+  }).filter(Boolean);
+}
+const isApplied = job => {
+  const status=norm(job.status);
+  if(/^(not applied|not submitted|pending|to apply|yet to apply|saved|shortlisted|interested|new|open)$/.test(status))return false;
+  return /(^| )(applied|submitted|interview|selected|offer|rejected|assessment|screening|hired)( |$)/.test(status);
+};
 function App(){
  const [jobs,setJobs]=useState([]),[fileName,setFileName]=useState(''),[sheetNames,setSheetNames]=useState([]),[sheet,setSheet]=useState(''),[workbook,setWorkbook]=useState(null),[tab,setTab]=useState('All Jobs'),[query,setQuery]=useState(''),[mode,setMode]=useState('All work modes'),[sort,setSort]=useState('company'),[notice,setNotice]=useState('Upload your Excel or CSV tracker to load your own jobs.');
  const input=useRef(null);
- const loadSheet=(wb,name)=>{const rows=XLSX.utils.sheet_to_json(wb.Sheets[name],{defval:'',raw:false});setJobs(normalize(rows));setSheet(name);setNotice(rows.length?'Loaded '+rows.length+' rows from “'+name+'”.':'This sheet has no job rows. Choose another sheet.');};
- const onFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});setWorkbook(wb);setFileName(f.name);setSheetNames(wb.SheetNames);loadSheet(wb,wb.SheetNames[0]);setTab('All Jobs');}catch(err){setNotice('Could not read this file. Upload a valid .xlsx, .xls or .csv file.');}e.target.value='';};
- const isApplied=j=>/applied|submitted|interview|selected|offer/i.test(String(j.status));
+ const loadSheet=(wb,name)=>{const parsed=normalizeSheet(wb.Sheets[name]);setJobs(parsed);setSheet(name);setNotice(parsed.length?'Loaded '+parsed.length+' job rows from “'+name+'”.':'No recognizable job rows found. Check that the selected sheet has a header row.');};
+ const onFile=async e=>{const f=e.target.files?.[0];if(!f)return;try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});setWorkbook(wb);setFileName(f.name);setSheetNames(wb.SheetNames);if(wb.SheetNames.length)loadSheet(wb,wb.SheetNames[0]);setTab('All Jobs');setQuery('');}catch(err){setNotice('Could not read this file. Upload a valid .xlsx, .xls or .csv file.');}e.target.value='';};
  const applied=jobs.filter(isApplied).length;
  const filtered=useMemo(()=>jobs.filter(j=>{const matchTab=tab==='All Jobs'||(tab==='Applied'&&isApplied(j))||(tab==='Not Applied'&&!isApplied(j))||(tab==='Individual'&&/individual|freelance|contract/i.test(String(j.mode)));const hay=[j.company,j.title,j.location,j.mode,j.status,j.salary,j.skills].join(' ').toLowerCase();return matchTab&&hay.includes(query.toLowerCase())&&(mode==='All work modes'||String(j.mode).toLowerCase().includes(mode.toLowerCase()));}).sort((a,b)=>String(a[sort]||'').localeCompare(String(b[sort]||''))),[jobs,tab,query,mode,sort]);
  const modes=[...new Set(jobs.map(j=>j.mode).filter(x=>x&&x!=='—'))];
