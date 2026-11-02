@@ -6,11 +6,11 @@ const FIELD_ALIASES = {
   company: ['company','company name','employer','organization','organisation','firm','business name','employer name','hiring company'],
   title: ['job title','title','position','role','job role','designation','opening','profile','job profile','vacancy'],
   location: ['location','job location','city','work location','place','office location','job city','location city'],
-  mode: ['work mode','work type','remote onsite','remote or onsite','employment type','job type','workplace type','working mode','work arrangement'],
-  status: ['status','application status','applied status','application stage','applied','application','progress'],
-  salary: ['salary','ctc','compensation','pay','salary range','package','annual salary','stipend'],
+  mode: ['work mode','work mode type','work type','remote onsite','remote or onsite','employment type','job type','workplace type','working mode','work arrangement'],
+  status: ['freshness status','freshness','status','application status','applied status','application stage','applied','application','progress'],
+  salary: ['salary stipend','salary','ctc','compensation','pay','salary range','package','annual salary','stipend'],
   skills: ['skills','required skills','key skills','technical skills','skill set','technologies'],
-  url: ['apply url','apply link','application url','job url','link','source url','source link','job link','application link','url'],
+  url: ['direct apply url','apply url','apply link','application url','job url','link','source url','source link','job link','application link','url'],
   date: ['date','posted date','job date','application date','last date','deadline']
 };
 const headerScore = headers => headers.reduce((score,h) => score + (Object.values(FIELD_ALIASES).some(list=>list.some(a=>norm(h)===norm(a)||norm(h).includes(norm(a))))?1:0),0);
@@ -31,15 +31,16 @@ function normalizeSheet(sheet, sourceTab='Individual Jobs'){
   const rows=matrix.slice(headerIndex+1);
   return rows.map((cells,i)=>{
     const get=field=>{const idx=columns[field];return idx>=0?String(cells[idx]??'').trim():'';};
-    const raw=Object.fromEntries(headers.map((h,j)=>[h,cells[j]??'']));
+    const raw=Object.fromEntries(headers.map((h,j)=>[h,cells[j]??'']).filter(([h])=>!norm(h).includes('ai agent task')));
     const company=get('company'),title=get('title'),location=get('location'),mode=get('mode'),status=get('status'),salary=get('salary'),skills=get('skills'),url=get('url'),date=get('date');
     const meaningful=[company,title,location,mode,status,salary,skills,url].some(Boolean);
     if(!meaningful)return null;
-    const tabStatus=sourceTab==='Applied'?'Applied':'Not Applied';
-    return {id:sourceTab+'-'+(i+1),raw,company:company||'—',title:title||'Untitled role',location:location||'—',mode:mode||'—',status:tabStatus,salary:salary||'Not specified',skills,url,date,sourceTab};
+    return {id:sourceTab+'-'+(i+1),raw,company:company||'—',title:title||'Untitled role',location:location||'—',mode:mode||'—',status:status||'Not specified',salary:salary||'Not specified',skills,url,date,sourceTab};
   }).filter(Boolean);
 }
-const isApplied = job => {
+const isApplied = job => job.sourceTab==='Applied';
+/* Application grouping is determined only by the source worksheet; the spreadsheet's Freshness / Status column is separate job-listing information. */
+const legacyIsApplied = job => {
   const status=norm(job.status);
   if(/^(not applied|not submitted|pending|to apply|yet to apply|saved|shortlisted|interested|new|open)$/.test(status))return false;
   return /(^| )(applied|submitted|interview|selected|offer|rejected|assessment|screening|hired)( |$)/.test(status);
